@@ -1,0 +1,318 @@
+name: Build ImageMagick for Android (Parallel Matrix)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  NDK_VERSION: r30-beta2
+  NDK_ZIP: android-ndk-${{ env.NDK_VERSION }}-linux.zip
+  NDK_URL: https://googledownloads.cn/android/repository/${{ env.NDK_ZIP }}
+  ANDROID_API: 35
+  TARGET_ARCH: arm64-v8a
+  TARGET_TRIPLE: aarch64-linux-android
+  PREBUILT_URL: https://github.com/CELEFT/C/releases/download/trash/libarchive-android-arm64-v8a-api35-static-shared.tar.gz
+  JOBS: 4
+
+jobs:
+  # ========================
+  # 并行编译依赖库（矩阵）
+  # ========================
+  build-libs:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [image, heif, text, extra]
+    env:
+      SYSROOT: ${{ github.workspace }}/sysroot-${{ matrix.group }}
+    steps:
+      - name: Set up NDK and sysroot
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config \
+            autoconf automake libtool gettext git wget unzip python3
+          wget -q ${{ env.NDK_URL }} -O ${{ env.NDK_ZIP }}
+          unzip -q ${{ env.NDK_ZIP }}
+          mv android-ndk-* android-ndk
+          echo "ANDROID_NDK=$PWD/android-ndk" >> $GITHUB_ENV
+          echo "PATH=$PWD/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH" >> $GITHUB_ENV
+          mkdir -p $SYSROOT
+
+      - name: Download prebuilt compression libraries
+        run: |
+          wget -q ${{ env.PREBUILT_URL }} -O prebuilt.tar.gz
+          tar -xzf prebuilt.tar.gz -C $SYSROOT
+
+      - name: Build libraries for ${{ matrix.group }}
+        run: |
+          export CC=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${{ env.ANDROID_API }}-clang
+          export CXX=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${{ env.ANDROID_API }}-clang++
+          export AR=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          export RANLIB=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
+          export PKG_CONFIG_PATH=$SYSROOT/lib/pkgconfig
+          export CFLAGS="-I$SYSROOT/include -fPIC"
+          export LDFLAGS="-L$SYSROOT/lib"
+
+          case ${{ matrix.group }} in
+            image)
+              # libpng
+              git clone --depth 1 https://github.com/glennrp/libpng.git
+              cd libpng
+              ./configure --prefix=$SYSROOT --host=${{ env.TARGET_TRIPLE }} \
+                --with-sysroot=$SYSROOT --enable-static --enable-shared
+              make -j${{ env.JOBS }} && make install
+              cd ..
+
+              # libjpeg-turbo
+              git clone --depth 1 https://github.com/libjpeg-turbo/libjpeg-turbo.git
+              cd libjpeg-turbo
+              mkdir build && cd build
+              cmake .. -DCMAKE_INSTALL_PREFIX=$SYSROOT \
+                -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
+                -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-${{ env.ANDROID_API }} \
+                -DBUILD_SHARED_LIBS=ON -DENABLE_STATIC=ON -DWITH_SIMD=OFF -DCMAKE_C_FLAGS="-fPIC"
+              make -j${{ env.JOBS }} && make install
+              cd ../..
+
+              # libtiff
+              git clone --depth 1 https://gitlab.com/libtiff/libtiff.git
+              cd libtiff
+              ./autogen.sh
+              ./configure --prefix=$SYSROOT --host=${{ env.TARGET_TRIPLE }} \
+                --with-sysroot=$SYSROOT --enable-static --enable-shared \
+                --with-zlib --with-lzma --with-zstd --with-lz4
+              make -j${{ env.JOBS }} && make install
+              cd ..
+
+              # libwebp
+              git clone --depth 1 https://github.com/webmproject/libwebp.git
+              cd libwebp
+              ./autogen.sh
+              ./configure --prefix=$SYSROOT --host=${{ env.TARGET_TRIPLE }} \
+                --with-sysroot=$SYSROOT --enable-static --enable-shared
+              make -j${{ env.JOBS }} && make install
+              cd ..
+              ;;
+
+            heif)
+              # libaom
+              git clone --depth 1 https://aomedia.googlesource.com/aom
+              mkdir aom/build && cd aom/build
+              cmake .. -DCMAKE_INSTALL_PREFIX=$SYSROOT \
+                -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
+                -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-${{ env.ANDROID_API }} \
+                -DBUILD_SHARED_LIBS=ON -DENABLE_DOCS=OFF -DENABLE_TESTS=OFF -DENABLE_EXAMPLES=OFF \
+                -DCMAKE_C_FLAGS="-fPIC" -DCMAKE_CXX_FLAGS="-fPIC"
+              make -j${{ env.JOBS }} && make install
+              cd ../..
+
+              # libde265
+              git clone --depth 1 https://github.com/strukturag/libde265.git
+              cd libde265
+              ./autogen.sh
+              ./configure --prefix=$SYSROOT --host=${{ env.TARGET_TRIPLE }} \
+                --with-sysroot=$SYSROOT --enable-static --enable-shared
+              make -j${{ env.JOBS }} && make install
+              cd ..
+
+              # libheif
+              git clone --depth 1 -b master https://github.com/strukturag/libheif.git
+              cd libheif
+              mkdir build && cd build
+              cmake .. -DCMAKE_INSTALL_PREFIX=$SYSROOT \
+                -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
+                -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-${{ env.ANDROID_API }} \
+                -DBUILD_SHARED_LIBS=ON \
+                -DWITH_AOM_ENCODER=ON -DWITH_AOM_DECODER=ON -DWITH_LIBDE265=ON \
+                -DENABLE_PLUGIN_LOADING=OFF \
+                -DCMAKE_C_FLAGS="-fPIC" -DCMAKE_CXX_FLAGS="-fPIC"
+              make -j${{ env.JOBS }} && make install
+              cd ../..
+              ;;
+
+            text)
+              # libxml2
+              git clone --depth 1 https://gitlab.gnome.org/GNOME/libxml2.git
+              cd libxml2
+              ./autogen.sh --prefix=$SYSROOT --host=${{ env.TARGET_TRIPLE }} \
+                --with-sysroot=$SYSROOT --enable-static --enable-shared \
+                --with-zlib --with-lzma
+              make -j${{ env.JOBS }} && make install
+              cd ..
+
+              # libfreetype
+              git clone --depth 1 https://gitlab.freedesktop.org/freetype/freetype.git
+              cd freetype
+              ./autogen.sh
+              ./configure --prefix=$SYSROOT --host=${{ env.TARGET_TRIPLE }} \
+                --with-sysroot=$SYSROOT --enable-static --enable-shared \
+                --with-zlib --with-bzip2
+              make -j${{ env.JOBS }} && make install
+              cd ..
+              ;;
+
+            extra)
+              # lcms2
+              git clone --depth 1 https://github.com/mm2/Little-CMS.git
+              cd Little-CMS
+              ./autogen.sh
+              ./configure --prefix=$SYSROOT --host=${{ env.TARGET_TRIPLE }} \
+                --with-sysroot=$SYSROOT --enable-static --enable-shared
+              make -j${{ env.JOBS }} && make install
+              cd ..
+
+              # fftw
+              git clone --depth 1 https://github.com/FFTW/fftw3.git
+              cd fftw3
+              ./bootstrap.sh
+              ./configure --prefix=$SYSROOT --host=${{ env.TARGET_TRIPLE }} \
+                --with-sysroot=$SYSROOT --enable-static --enable-shared \
+                --enable-single --enable-threads
+              make -j${{ env.JOBS }} && make install
+              cd ..
+
+              # liblqr
+              git clone --depth 1 https://github.com/carlobaldassi/liblqr.git
+              cd liblqr
+              ./autogen.sh
+              ./configure --prefix=$SYSROOT --host=${{ env.TARGET_TRIPLE }} \
+                --with-sysroot=$SYSROOT --enable-static --enable-shared
+              make -j${{ env.JOBS }} && make install
+              cd ..
+
+              # libopenjp2
+              git clone --depth 1 https://github.com/uclouvain/openjpeg.git
+              cd openjpeg
+              mkdir build && cd build
+              cmake .. -DCMAKE_INSTALL_PREFIX=$SYSROOT \
+                -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
+                -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-${{ env.ANDROID_API }} \
+                -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON \
+                -DCMAKE_C_FLAGS="-fPIC" -DCMAKE_CXX_FLAGS="-fPIC"
+              make -j${{ env.JOBS }} && make install
+              cd ../..
+
+              # libraw
+              git clone --depth 1 https://github.com/LibRaw/LibRaw.git
+              cd LibRaw
+              ./autogen.sh
+              ./configure --prefix=$SYSROOT --host=${{ env.TARGET_TRIPLE }} \
+                --with-sysroot=$SYSROOT --enable-static --enable-shared
+              make -j${{ env.JOBS }} && make install
+              cd ..
+
+              # libdjvu (DjVu)
+              git clone --depth 1 https://github.com/jwilk/djvulibre.git
+              cd djvulibre
+              ./autogen.sh
+              ./configure --prefix=$SYSROOT --host=${{ env.TARGET_TRIPLE }} \
+                --with-sysroot=$SYSROOT --enable-static --enable-shared
+              make -j${{ env.JOBS }} && make install
+              cd ..
+              ;;
+          esac
+
+      - name: Upload artifacts for ${{ matrix.group }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: libs-${{ matrix.group }}
+          path: ${{ env.SYSROOT }}
+
+  # ========================
+  # 聚合依赖库并编译 ImageMagick
+  # ========================
+  build-imagemagick:
+    runs-on: ubuntu-latest
+    needs: build-libs
+    env:
+      SYSROOT: ${{ github.workspace }}/sysroot-merged
+    steps:
+      - name: Checkout ImageMagick source
+        uses: actions/checkout@v4
+        with:
+          repository: ImageMagick/ImageMagick
+          path: ImageMagick
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config autoconf automake libtool git wget unzip
+
+      - name: Download all library artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ github.workspace }}/artifacts
+
+      - name: Merge sysroot
+        run: |
+          mkdir -p $SYSROOT
+          for d in ${{ github.workspace }}/artifacts/libs-*; do
+            if [ -d "$d" ]; then
+              cp -r $d/* $SYSROOT/
+            fi
+          done
+
+      - name: Setup NDK (for ImageMagick build)
+        run: |
+          wget -q ${{ env.NDK_URL }} -O ${{ env.NDK_ZIP }}
+          unzip -q ${{ env.NDK_ZIP }}
+          mv android-ndk-* android-ndk
+          echo "ANDROID_NDK=$PWD/android-ndk" >> $GITHUB_ENV
+          echo "PATH=$PWD/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH" >> $GITHUB_ENV
+
+      - name: Build ImageMagick (static)
+        run: |
+          cd ImageMagick
+          export CC=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${{ env.ANDROID_API }}-clang
+          export CXX=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${{ env.ANDROID_API }}-clang++
+          export AR=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          export RANLIB=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
+          export PKG_CONFIG_PATH=$SYSROOT/lib/pkgconfig
+          export CFLAGS="-I$SYSROOT/include -fPIC"
+          export LDFLAGS="-L$SYSROOT/lib -static-libstdc++ -static-libgcc"
+          ./configure \
+            --host=${{ env.TARGET_TRIPLE }} \
+            --with-sysroot=$SYSROOT \
+            --prefix=$SYSROOT \
+            --enable-static --disable-shared \
+            --with-modules=no \
+            --enable-hdri=yes \
+            --with-quantum-depth=16 \
+            --enable-64bit-channel-masks=yes \
+            --enable-openmp=no \
+            --enable-zero-configuration=yes \
+            --with-utilities=yes \
+            --with-frozenpaths=yes \
+            --with-security-policy=open \
+            --with-bzlib=yes --with-zlib=yes --with-zip=yes --with-zstd=yes \
+            --with-freetype=yes --with-fontconfig=no --with-raqm=no \
+            --with-jpeg=yes --with-png=yes --with-tiff=yes --with-webp=yes \
+            --with-heic=yes --with-openjp2=yes --with-openexr=no --with-jxl=no --with-uhdr=no \
+            --with-lcms=yes --with-fftw=yes --with-lqr=yes \
+            --with-lzma=yes --with-xml=yes \
+            --with-wmf=no --with-dps=no --with-gslib=no --with-rsvg=no \
+            --with-autotrace=no --with-flif=no --with-fpx=no \
+            --with-djvu=yes --with-raw=yes \
+            --with-gvc=no --with-x=no --with-gdi32=no \
+            LDFLAGS="$LDFLAGS -static"
+          make -j${{ env.JOBS }}
+          make install
+
+      - name: Package SDK
+        run: |
+          mkdir -p sdk-package/{bin,include,lib}
+          cp -r $SYSROOT/include/* sdk-package/include/
+          cp $SYSROOT/lib/*.a sdk-package/lib/ 2>/dev/null || true
+          cp $SYSROOT/lib/*.so sdk-package/lib/ 2>/dev/null || true
+          cp $SYSROOT/bin/magick sdk-package/bin/ 2>/dev/null || true
+          cd sdk-package
+          tar -czvf ../imagemagick-android-sdk-arm64-v8a-full.tar.gz .
+
+      - name: Upload final SDK
+        uses: actions/upload-artifact@v4
+        with:
+          name: imagemagick-android-sdk
+          path: imagemagick-android-sdk-arm64-v8a-full.tar.gz
