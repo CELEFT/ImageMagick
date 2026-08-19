@@ -8,13 +8,14 @@ on:
 
 env:
   NDK_VERSION: r30-beta2
-  NDK_ZIP: android-ndk-${{ env.NDK_VERSION }}-linux.zip
-  NDK_URL: https://googledownloads.cn/android/repository/${{ env.NDK_ZIP }}
   ANDROID_API: 35
   TARGET_ARCH: arm64-v8a
   TARGET_TRIPLE: aarch64-linux-android
   PREBUILT_URL: https://github.com/CELEFT/C/releases/download/trash/libarchive-android-arm64-v8a-api35-static-shared.tar.gz
   JOBS: 4
+  # 直接使用字符串，避免 env 自引用
+  NDK_ZIP: android-ndk-r30-beta2-linux.zip
+  NDK_URL: https://googledownloads.cn/android/repository/android-ndk-r30-beta2-linux.zip
 
 jobs:
   # ========================
