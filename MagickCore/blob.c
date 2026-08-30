@@ -2100,6 +2100,7 @@ MagickExport void *ImageToBlob(const ImageInfo *image_info,
           image->blob->extent=0;
           *image->filename='\0';
           status=WriteImage(blob_info,image,exception);
+          SyncBlobStream(blob_info,image,image);
           *length=image->blob->length;
           blob=DetachBlob(image->blob);
           if (blob != (void *) NULL)
@@ -2109,8 +2110,9 @@ MagickExport void *ImageToBlob(const ImageInfo *image_info,
               else
                 blob=ResizeQuantumMemory(blob,*length+1,sizeof(unsigned char));
             }
-          else if ((status == MagickFalse) && (image->blob->extent == 0))
-            blob_info->blob=RelinquishMagickMemory(blob_info->blob);
+          else
+            if ((status == MagickFalse) && (image->blob->extent == 0))
+              blob_info->blob=RelinquishMagickMemory(blob_info->blob);
         }
     }
   else
@@ -2504,6 +2506,7 @@ MagickExport void *ImagesToBlob(const ImageInfo *image_info,Image *images,
           images->blob->extent=0;
           *images->filename='\0';
           status=WriteImages(blob_info,images,images->filename,exception);
+          SyncBlobStream(blob_info,images,images);
           *length=images->blob->length;
           blob=DetachBlob(images->blob);
           if (blob != (void *) NULL)
@@ -4031,8 +4034,15 @@ MagickExport ssize_t ReadBlob(Image *image,const size_t length,void *data)
     case CustomStream:
     {
       if (blob_info->custom_stream->reader != (CustomStreamHandler) NULL)
-        count=blob_info->custom_stream->reader(q,length,
-          blob_info->custom_stream->data);
+        {
+          count=blob_info->custom_stream->reader(q,length,
+            blob_info->custom_stream->data);
+          if (count <= 0)
+            {
+              blob_info->eof=MagickTrue;
+              count=0;
+            }
+        }
       break;
     }
   }
@@ -5616,6 +5626,70 @@ static int SyncBlob(const Image *image)
       break;
   }
   return(status);
+}
+
+/*
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                             %
+%                                                                             %
+%                                                                             %
++  S y n c B l o b S t r e a m                                                %
+%                                                                             %
+%                                                                             %
+%                                                                             %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%
+%  SyncBlobStream() transfers ownership of an in-memory blob stream from the
+%  image that has just been written back to the owner image and to image info.
+%  The method copies the current buffer state onto the owner, refreshes
+%  image info, and detaches the borrower so exactly one object owns the memory.
+%
+%  The format of the SyncBlobStream method is:
+%
+%      void SyncBlobStream(ImageInfo *image,const Image *image,Image *owner)
+%
+%  A description of each parameter follows:
+%
+%    o image_info: image info whose blob/length members are refreshed; may be
+%      NULL.
+%
+%    o owner: the image ImagesToBlob()/ImageToBlob() harvests the blob from
+%      (the head of the list).
+%
+%    o image: the image that was just written; may be the owner.
+%
+*/
+MagickPrivate void SyncBlobStream(ImageInfo *image_info,Image *image,
+  Image *owner)
+{
+  assert(owner != (Image *) NULL);
+  assert(image != (Image *) NULL);
+  assert(image->signature == MagickCoreSignature);
+  if (image->blob == (BlobInfo *) NULL)
+    return;
+  if (image->blob->data == (unsigned char *) NULL)
+    return;
+  if (image_info != (ImageInfo *) NULL)
+    {
+      image_info->blob=(void *) image->blob->data;
+      image_info->length=image->blob->length;
+    }
+  if ((image == owner) || (owner->blob == (BlobInfo *) NULL))
+    return;
+  if (owner->blob == (BlobInfo *) NULL)
+    return;
+  /*
+    Promote the live buffer onto the owner before detaching the borrower;
+    DetachBlob() clears image->blob->data.
+  */
+  owner->blob->data=image->blob->data;
+  owner->blob->extent=image->blob->extent;
+  owner->blob->length=image->blob->length;
+  owner->blob->offset=image->blob->offset;
+  owner->blob->quantum=image->blob->quantum;
+  owner->blob->type=BlobStream;
+  owner->blob->exempt=MagickTrue;
+  (void) DetachBlob(image->blob);
 }
 
 /*

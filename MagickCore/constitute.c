@@ -723,7 +723,7 @@ MagickExport Image *ReadImage(const ImageInfo *image_info,
       */
       if (GetMagickDecoderThreadSupport(magick_info) == MagickFalse)
         LockSemaphoreInfo(magick_info->semaphore);
-      status=IsCoderAuthorized(magick_info->magick_module,read_info->magick,
+      status=IsCoderAuthorized(magick_info->magick_module,magick_info->name,
         ReadPolicyRights,exception);
       image=(Image *) NULL;
       if (status != MagickFalse)
@@ -785,7 +785,7 @@ MagickExport Image *ReadImage(const ImageInfo *image_info,
       */
       if (GetMagickDecoderThreadSupport(magick_info) == MagickFalse)
         LockSemaphoreInfo(magick_info->semaphore);
-      status=IsCoderAuthorized(magick_info->magick_module,read_info->magick,
+      status=IsCoderAuthorized(magick_info->magick_module,magick_info->name,
         ReadPolicyRights,exception);
       image=(Image *) NULL;
       if (status != MagickFalse)
@@ -1367,7 +1367,7 @@ MagickExport MagickBooleanType WriteImage(const ImageInfo *image_info,
       */
       if (GetMagickEncoderThreadSupport(magick_info) == MagickFalse)
         LockSemaphoreInfo(magick_info->semaphore);
-      status=IsCoderAuthorized(magick_info->magick_module,write_info->magick,
+      status=IsCoderAuthorized(magick_info->magick_module,magick_info->name,
         WritePolicyRights,exception);
       if (status != MagickFalse)
         status=encoder(write_info,image,exception);
@@ -1439,7 +1439,7 @@ MagickExport MagickBooleanType WriteImage(const ImageInfo *image_info,
               */
               if (GetMagickEncoderThreadSupport(magick_info) == MagickFalse)
                 LockSemaphoreInfo(magick_info->semaphore);
-              status=IsCoderAuthorized(magick_info->magick_module,write_info->magick,
+              status=IsCoderAuthorized(magick_info->magick_module,magick_info->name,
                 WritePolicyRights,exception);
               if (status != MagickFalse)
                 status=encoder(write_info,image,exception);
@@ -1592,6 +1592,8 @@ MagickExport MagickBooleanType WriteImages(const ImageInfo *image_info,
       progress_monitor=SetImageProgressMonitor(p,(MagickProgressMonitor) NULL,
         p->client_data);
     status&=(MagickStatusType) WriteImage(write_info,p,exception);
+    if (write_info->blob != (void *) NULL)
+      SyncBlobStream(write_info,p,images);
     if (number_images != 1)
       (void) SetImageProgressMonitor(p,progress_monitor,p->client_data);
     if (write_info->adjoin != MagickFalse)

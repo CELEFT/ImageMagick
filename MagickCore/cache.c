@@ -659,7 +659,7 @@ static MagickBooleanType ClonePixelCacheOnDisk(
     }
   buffer=(unsigned char *) AcquireQuantumMemory(quantum,sizeof(*buffer));
   if (buffer == (unsigned char *) NULL)
-    ThrowFatalException(ResourceLimitFatalError,"MemoryAllocationFailed");
+    return(MagickFalse);
   extent=0;
   while (extent < cache_info->length)
   {
@@ -3835,8 +3835,17 @@ static MagickBooleanType OpenPixelCache(Image *image,const MapMode mode,
   cache_info->mode=mode;
   number_pixels=(MagickSizeType) cache_info->columns*cache_info->rows;
   packet_size=MagickMax(cache_info->number_channels,1)*sizeof(Quantum);
-  if (image->metacontent_extent != 0)
-    packet_size+=cache_info->metacontent_extent;
+  if (cache_info->metacontent_extent != 0)
+    {
+      if (HeapOverflowCheckAdd(packet_size,cache_info->metacontent_extent) != MagickFalse)
+        {
+          cache_info->storage_class=UndefinedClass;
+          cache_info->length=0;
+          ThrowBinaryException(ResourceLimitError,"PixelCacheAllocationFailed",
+            image->filename);
+        }
+      packet_size+=cache_info->metacontent_extent;
+    }
   if (CacheOverflowSanityCheckGetSize(number_pixels,packet_size,&length) != MagickFalse)
     {
       cache_info->storage_class=UndefinedClass;
@@ -3888,6 +3897,7 @@ static MagickBooleanType OpenPixelCache(Image *image,const MapMode mode,
             }
           if (cache_info->pixels == (Quantum *) NULL)
             {
+              RelinquishMagickResource(MemoryResource,cache_info->length);
               cache_info->mapped=source_info.mapped;
               cache_info->pixels=source_info.pixels;
             }
